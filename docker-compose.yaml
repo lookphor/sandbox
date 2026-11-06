@@ -1,0 +1,39 @@
+name: sandbox
+
+services:
+  backend:
+    image: sandbox-backend:latest
+    container_name: sandbox-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Внутренний порт, на который биндится api
+      LISTEN_ADDR: "0.0.0.0:${BACKEND_PORT:-8081}"
+    networks:
+      - sandbox
+    expose:
+      - "${BACKEND_PORT:-8081}"         # виден только внутри сети
+    # ports:
+    #   - "127.0.0.1:${BACKEND_PORT:-8081}:${BACKEND_PORT:-8081}"   # ← для отладки с хоста
+
+  frontend:
+    image: sandbox-frontend:latest
+    container_name: sandbox-frontend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "${FRONTEND_PORT:-8888}"
+      BACKEND_URL: "http://backend:${BACKEND_PORT:-8081}"
+    networks:
+      - sandbox
+    ports:
+      - "${FRONTEND_PORT:-8888}:${FRONTEND_PORT:-8888}"
+    depends_on:
+      - backend
+
+networks:
+  sandbox:
+    driver: bridge
+    name: sandbox
