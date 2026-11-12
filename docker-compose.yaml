@@ -2,38 +2,28 @@ name: sandbox
 
 services:
   backend:
-    image: sandbox-backend:latest
+    image: ${NEXUS_REGISTRY}/${NEXUS_BACKEND_REPOSITORY}/sandbox-backend:latest
     container_name: sandbox-backend
-    restart: unless-stopped
     env_file:
       - .env
-    environment:
-      # Внутренний порт, на который биндится api
-      LISTEN_ADDR: "0.0.0.0:${BACKEND_PORT:-8081}"
     networks:
-      - sandbox
-    expose:
-      - "${BACKEND_PORT:-8081}"         # виден только внутри сети
-    # ports:
-    #   - "127.0.0.1:${BACKEND_PORT:-8081}:${BACKEND_PORT:-8081}"   # ← для отладки с хоста
+      - sandbox-net
+    restart: unless-stopped
 
   frontend:
-    image: sandbox-frontend:latest
+    image: ${NEXUS_REGISTRY}/${NEXUS_FRONTEND_REPOSITORY}/sandbox-frontend:latest
     container_name: sandbox-frontend
-    restart: unless-stopped
     env_file:
       - .env
-    environment:
-      PORT: "${FRONTEND_PORT:-8888}"
-      BACKEND_URL: "http://backend:${BACKEND_PORT:-8081}"
-    networks:
-      - sandbox
     ports:
-      - "${FRONTEND_PORT:-8888}:${FRONTEND_PORT:-8888}"
+      - "${FRONTEND_PORT:-8888}:8888"
     depends_on:
       - backend
+    networks:
+      - sandbox-net
+    restart: unless-stopped
 
 networks:
-  sandbox:
+  sandbox-net:
+    name: sandbox-network
     driver: bridge
-    name: sandbox

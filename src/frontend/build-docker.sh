@@ -1,20 +1,28 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-IMAGE="${IMAGE:-sandbox-frontend}"
-TAG="${TAG:-latest}"
-REGISTRY="${REGISTRY:-}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-FULL="${IMAGE}:${TAG}"
-[ -n "${REGISTRY}" ] && FULL="${REGISTRY}/${FULL}"
+if [ -f "$PROJECT_ROOT/.env" ]; then
+  set -a
+  . "$PROJECT_ROOT/.env"
+  set +a
+fi
 
-cd "$(dirname "$0")"
+VERSION="${VERSION:-latest}"
+IMAGE="${NEXUS_REGISTRY}/${NEXUS_FRONTEND_REPOSITORY}/sandbox-frontend"
 
-docker build \
-    --label "org.opencontainers.image.source=$(git config --get remote.origin.url 2>/dev/null || echo unknown)" \
-    --label "org.opencontainers.image.revision=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
-    --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    -t "${FULL}" \
-    .
+echo "Вход в registry ${NEXUS_REGISTRY}..."
+printf '%s' "$NEXUS_PASSWORD" | docker login "$NEXUS_REGISTRY" -u "$NEXUS_USERNAME" --password-stdin
 
-echo "✓ собрано: ${FULL}"
+echo "Сборка ${IMAGE}:${VERSION}..."
+docker build --target runtime -t "${IMAGE}:${VERSION}" -t "${IMAGE}:latest" "$SCRIPT_DIR"
+
+echo "Публикация в registry..."
+docker push "${IMAGE}:${VERSION}"
+if [ "$VERSION" != "latest" ]; then
+  docker push "${IMAGE}:latest"
+fi
+
+echo "Готово: ${IMAGE}:${VERSION}"
