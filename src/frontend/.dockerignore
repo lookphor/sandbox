@@ -1,0 +1,10 @@
+node_modules
+dist
+build
+.git
+.gitignore
+*.log
+.env
+.env.*
+Dockerfile
+build-*.sh
