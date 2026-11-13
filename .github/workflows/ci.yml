@@ -1,0 +1,118 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      VERSION:
+        description: "VERSION для повторного деплоя/отката (пусто = сгенерировать)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Compute VERSION
+        id: version
+        run: |
+          V="${{ inputs.VERSION }}"
+          if [ -z "$V" ]; then V=$(date -u +%Y%m%d-%H%M%S); fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$V"
+
+  build:
+    runs-on: ubuntu-latest
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login Nexus
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.NEXUS_HOST }}
+          username: ${{ secrets.NEXUS_REPO_USER }}
+          password: ${{ secrets.NEXUS_REPO_PASS }}
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/sandbox-${{ matrix.component }}
+            ${{ secrets.NEXUS_HOST }}/stepanov-${{ matrix.component }}-docker/sandbox-${{ matrix.component }}
+          tags: |
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.component }}
+          target: runtime
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [version, build]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - name: Install ssh
+        run: sudo apt-get update && sudo apt-get install -y openssh-client
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.VM_SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Deploy on VM
+        env:
+          V: ${{ needs.version.outputs.version }}
+          ENV_FILE: ${{ secrets.APP_ENV_FILE }}
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+        run: |
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
+            set -e
+            echo '${{ secrets.GHCR_PAT }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+            export REPOSITORY_BACKEND=$REGISTRY/sandbox-backend
+            export REPOSITORY_FRONTEND=$REGISTRY/sandbox-frontend
+            export VERSION=$V
+            cd ~/sandbox
+            cat > .env <<'EOF'
+          $ENV_FILE
+          EOF
+            echo \"REPOSITORY_BACKEND=$REPOSITORY_BACKEND\" >> .env
+            echo \"REPOSITORY_FRONTEND=$REPOSITORY_FRONTEND\" >> .env
+            echo \"VERSION=$VERSION\" >> .env
+            docker compose pull
+            docker compose up -d
+            echo \"Deployed VERSION=$VERSION\"
+          "
