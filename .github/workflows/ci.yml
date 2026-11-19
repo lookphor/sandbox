@@ -133,7 +133,7 @@ jobs:
       - name: Copy files and deploy
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          APP_ENV_FILE: ${{ secrets.APP_ENV_FILE }}
+          APP_ENV_FILE: ${{ vars.APP_ENV_FILE }}
           NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
           NEXUS_USER: ${{ secrets.NEXUS_REPO_USER }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_REPO_PASS }}
