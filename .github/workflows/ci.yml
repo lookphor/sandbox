@@ -9,6 +9,7 @@ on:
         description: "VERSION для повторного деплоя/отката (пусто = сгенерировать)"
         required: false
         type: string
+        default: ""
 
 permissions:
   contents: read
@@ -22,15 +23,35 @@ jobs:
     steps:
       - name: Compute VERSION
         id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.VERSION }}
+        shell: bash
         run: |
-          V="${{ inputs.VERSION }}"
-          if [ -z "$V" ]; then V=$(date -u +%Y%m%d-%H%M%S); fi
+          V="${REQUESTED_VERSION:-$(date -u +%Y%m%d-%H%M%S)}"
+          if ! [[ "$V" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+            echo 'Expected VERSION in YYYYMMDD-HHMMSS format.' >&2
+            exit 1
+          fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "VERSION=$V"
 
+  test:
+    if: github.event_name != 'workflow_dispatch' || inputs.VERSION == ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Run tests
+        working-directory: src/backend
+        run: go test -count=1 ./...
+
   build:
     runs-on: ubuntu-latest
-    needs: version
+    needs: [version, test]
     strategy:
       fail-fast: false
       matrix:
@@ -38,18 +59,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Allow Docker to access HTTP Nexus
+        env:
+          NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
+        shell: bash
+        run: |
+          config=$(mktemp)
+          if sudo test -f /etc/docker/daemon.json; then
+            sudo cat /etc/docker/daemon.json
+          else
+            printf '{}\n'
+          fi | jq --arg host "$NEXUS_HOST" \
+            '."insecure-registries" |= ((. // []) + [$host] | unique)' > "$config"
+          sudo install -D -m 644 "$config" /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      - uses: docker/setup-buildx-action@v3
         with:
           buildkitd-config-inline: |
             [registry."${{ secrets.NEXUS_HOST }}"]
               http = true
-
-      - name: Configure Docker for insecure registry
-        run: |
-          sudo mkdir -p /etc/docker
-          echo '{"insecure-registries":["${{ secrets.NEXUS_HOST }}"]}' | sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
 
       - name: Login ghcr.io
         uses: docker/login-action@v3
@@ -75,7 +104,7 @@ jobs:
           tags: |
             type=raw,value=${{ needs.version.outputs.version }}
             type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build & push
         uses: docker/build-push-action@v6
@@ -91,39 +120,40 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: [version, build]
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      !cancelled() && github.ref == 'refs/heads/main' &&
+      needs.version.result == 'success' &&
+      (needs.build.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && inputs.VERSION != '' && needs.build.result == 'skipped'))
     environment: production
     steps:
-      - name: Install ssh
-        run: sudo apt-get update && sudo apt-get install -y openssh-client
+      - uses: actions/checkout@v4
 
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          echo "${{ secrets.VM_SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
 
-      - name: Deploy on VM
+      - name: Copy files and deploy
         env:
-          V: ${{ needs.version.outputs.version }}
-          ENV_FILE: ${{ secrets.APP_ENV_FILE }}
-          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          VERSION: ${{ needs.version.outputs.version }}
+          APP_ENV_FILE: ${{ vars.APP_ENV_FILE }}
+          NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
+          NEXUS_USER: ${{ secrets.NEXUS_REPO_USER }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_REPO_PASS }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VM_SSH_KNOWN_HOSTS }}
+        shell: bash
         run: |
-          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-            set -e
-            echo '${{ secrets.GHCR_PAT }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
-            export REPOSITORY_BACKEND=$REGISTRY/sandbox-backend
-            export REPOSITORY_FRONTEND=$REGISTRY/sandbox-frontend
-            export VERSION=$V
-            cd ~/sandbox
-            cat > .env <<'EOF'
-          $ENV_FILE
-          EOF
-            echo \"REPOSITORY_BACKEND=$REPOSITORY_BACKEND\" >> .env
-            echo \"REPOSITORY_FRONTEND=$REPOSITORY_FRONTEND\" >> .env
-            echo \"VERSION=$VERSION\" >> .env
-            docker compose pull
-            docker compose up -d
-            echo \"Deployed VERSION=$VERSION\"
-          "
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+          printf '%s\n' "$APP_ENV_FILE" > .env
+          printf 'NEXUS_REGISTRY=%s\nIMAGE_REGISTRY=%s\nREGISTRY_USER=%s\nIMAGE_TAG=%s\nVERSION=%s\n' \
+            "$NEXUS_HOST" "$NEXUS_HOST" "$NEXUS_USER" "$VERSION" "$VERSION" >> .env
+
+          target="$VM_USER@$VM_HOST"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$target" 'umask 077; mkdir -p ~/sandbox'
+          scp -B -o StrictHostKeyChecking=yes docker-compose.yaml .env deploy.sh "$target:sandbox/"
+          printf '%s\n' "$NEXUS_PASSWORD" |
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$target" 'cd ~/sandbox && chmod 600 .env && sh deploy.sh'
