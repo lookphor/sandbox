@@ -1,0 +1,43 @@
+name: cd
+
+on:
+  workflow_dispatch:
+    inputs:
+      VERSION:
+        description: "Тег образов в GHCR (формат YYYYMMDD-HHMMSS)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.22.1
+
+      - name: Deploy with Helm
+        shell: bash
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+          VERSION: ${{ inputs.VERSION }}
+        run: |
+          test -n "$KUBE_CONFIG"
+          [[ "$VERSION" =~ ^[0-9]{8}-[0-9]{6}$ ]]
+
+          install -d -m 700 "$HOME/.kube"
+          umask 077
+          printf '%s\n' "$KUBE_CONFIG" > "$HOME/.kube/config"
+
+          helm upgrade --install sandbox ./helm/sandbox \
+            --kubeconfig "$HOME/.kube/config" \
+            --namespace default \
+            --set-string "image.tag=$VERSION" \
+            --wait --timeout 5m
