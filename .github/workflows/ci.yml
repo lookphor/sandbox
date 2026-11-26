@@ -50,6 +50,7 @@ jobs:
         run: go test -count=1 ./...
 
   build:
+    if: github.event_name != 'workflow_dispatch' || inputs.VERSION == ''
     runs-on: ubuntu-latest
     needs: [version, test]
     strategy:
@@ -59,26 +60,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Allow Docker to access HTTP Nexus
-        env:
-          NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
-        shell: bash
-        run: |
-          config=$(mktemp)
-          if sudo test -f /etc/docker/daemon.json; then
-            sudo cat /etc/docker/daemon.json
-          else
-            printf '{}\n'
-          fi | jq --arg host "$NEXUS_HOST" \
-            '."insecure-registries" |= ((. // []) + [$host] | unique)' > "$config"
-          sudo install -D -m 644 "$config" /etc/docker/daemon.json
-          sudo systemctl restart docker
+      # Nexus-related: доступ Docker к HTTP Nexus отключён.
+      # - name: Allow Docker to access HTTP Nexus
+      #   env:
+      #     NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
+      #   shell: bash
+      #   run: |
+      #     config=$(mktemp)
+      #     if sudo test -f /etc/docker/daemon.json; then
+      #       sudo cat /etc/docker/daemon.json
+      #     else
+      #       printf '{}\n'
+      #     fi | jq --arg host "$NEXUS_HOST" \
+      #       '."insecure-registries" |= ((. // []) + [$host] | unique)' > "$config"
+      #     sudo install -D -m 644 "$config" /etc/docker/daemon.json
+      #     sudo systemctl restart docker
 
       - uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-config-inline: |
-            [registry."${{ secrets.NEXUS_HOST }}"]
-              http = true
+        # Nexus-related: BuildKit-конфиг для Nexus отключён.
+        # with:
+        #   buildkitd-config-inline: |
+        #     [registry."${{ secrets.NEXUS_HOST }}"]
+        #       http = true
 
       - name: Login ghcr.io
         uses: docker/login-action@v3
@@ -87,20 +90,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login Nexus
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.NEXUS_HOST }}
-          username: ${{ secrets.NEXUS_REPO_USER }}
-          password: ${{ secrets.NEXUS_REPO_PASS }}
+      # Nexus-related: логин в Nexus отключён.
+      # - name: Login Nexus
+      #   uses: docker/login-action@v3
+      #   with:
+      #     registry: ${{ secrets.NEXUS_HOST }}
+      #     username: ${{ secrets.NEXUS_REPO_USER }}
+      #     password: ${{ secrets.NEXUS_REPO_PASS }}
 
       - name: Tags
         id: meta
         uses: docker/metadata-action@v5
         with:
+          # Nexus-related: публикация в Nexus отключена.
+          # ${{ secrets.NEXUS_HOST }}/stepanov-${{ matrix.component }}-docker/sandbox-${{ matrix.component }}
           images: |
             ghcr.io/${{ github.repository_owner }}/sandbox-${{ matrix.component }}
-            ${{ secrets.NEXUS_HOST }}/stepanov-${{ matrix.component }}-docker/sandbox-${{ matrix.component }}
           tags: |
             type=raw,value=${{ needs.version.outputs.version }}
             type=sha,format=short
@@ -117,43 +122,43 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
 
-  deploy:
-    runs-on: ubuntu-latest
-    needs: [version, build]
-    if: >-
-      !cancelled() && github.ref == 'refs/heads/main' &&
-      needs.version.result == 'success' &&
-      (needs.build.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' && inputs.VERSION != '' && needs.build.result == 'skipped'))
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
+  # deploy:
+  #   runs-on: ubuntu-latest
+  #   needs: [version, build]
+  #   if: >-
+  #     !cancelled() && github.ref == 'refs/heads/main' &&
+  #     needs.version.result == 'success' &&
+  #     (needs.build.result == 'success' ||
+  #      (github.event_name == 'workflow_dispatch' && inputs.VERSION != '' && needs.build.result == 'skipped'))
+  #   environment: production
+  #   steps:
+  #     - uses: actions/checkout@v4
 
 
-      - name: Copy files and deploy
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-          APP_ENV_FILE: ${{ vars.APP_ENV_FILE }}
-          NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
-          NEXUS_USER: ${{ secrets.NEXUS_REPO_USER }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_REPO_PASS }}
-          VM_USER: ${{ secrets.VM_USER }}
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_KEY: ${{ secrets.VM_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.VM_SSH_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
-          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+  #     - name: Copy files and deploy
+  #       env:
+  #         VERSION: ${{ needs.version.outputs.version }}
+  #         APP_ENV_FILE: ${{ vars.APP_ENV_FILE }}
+  #         NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
+  #         NEXUS_USER: ${{ secrets.NEXUS_REPO_USER }}
+  #         NEXUS_PASSWORD: ${{ secrets.NEXUS_REPO_PASS }}
+  #         VM_USER: ${{ secrets.VM_USER }}
+  #         VM_HOST: ${{ secrets.VM_HOST }}
+  #         SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+  #         KNOWN_HOSTS: ${{ secrets.VM_SSH_KNOWN_HOSTS }}
+  #       shell: bash
+  #       run: |
+  #         umask 077
+  #         mkdir -p ~/.ssh
+  #         printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+  #         printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
 
-          printf '%s\n' "$APP_ENV_FILE" > .env
-          printf 'NEXUS_REGISTRY=%s\nIMAGE_REGISTRY=%s\nREGISTRY_USER=%s\nIMAGE_TAG=%s\nVERSION=%s\n' \
-            "$NEXUS_HOST" "$NEXUS_HOST" "$NEXUS_USER" "$VERSION" "$VERSION" >> .env
+  #         printf '%s\n' "$APP_ENV_FILE" > .env
+  #         printf 'NEXUS_REGISTRY=%s\nIMAGE_REGISTRY=%s\nREGISTRY_USER=%s\nIMAGE_TAG=%s\nVERSION=%s\n' \
+  #           "$NEXUS_HOST" "$NEXUS_HOST" "$NEXUS_USER" "$VERSION" "$VERSION" >> .env
 
-          target="$VM_USER@$VM_HOST"
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$target" 'umask 077; mkdir -p ~/sandbox'
-          scp -B -o StrictHostKeyChecking=yes docker-compose.yaml .env deploy.sh "$target:sandbox/"
-          printf '%s\n' "$NEXUS_PASSWORD" |
-            ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$target" 'cd ~/sandbox && chmod 600 .env && sh deploy.sh'
+  #         target="$VM_USER@$VM_HOST"
+  #         ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$target" 'umask 077; mkdir -p ~/sandbox'
+  #         scp -B -o StrictHostKeyChecking=yes docker-compose.yaml .env deploy.sh "$target:sandbox/"
+  #         printf '%s\n' "$NEXUS_PASSWORD" |
+  #           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$target" 'cd ~/sandbox && chmod 600 .env && sh deploy.sh'
