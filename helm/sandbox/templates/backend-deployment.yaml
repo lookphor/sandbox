@@ -18,6 +18,26 @@ spec:
         - name: backend
           image: "{{ .Values.image.backend }}:{{ .Values.image.tag }}"
           imagePullPolicy: Always
+          {{- if .Values.postgres.enabled }}
+          env:
+            - name: DB_ENABLED
+              value: "true"
+            - name: DB_HOST
+              value: sandbox-postgres
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sandbox-postgres
+                  key: POSTGRES_PASSWORD
+            - name: DB_NAME
+              value: {{ .Values.postgres.database | quote }}
+            - name: DB_SSLMODE
+              value: disable
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.ports.backend }}

@@ -11,3 +11,11 @@ ports:
 resources:
   requests: { cpu: 100m, memory: 128Mi }
   limits: { cpu: 500m, memory: 512Mi }
+
+postgres:
+  enabled: true
+  image: postgres:15-alpine
+  user: sandbox
+  password: sandbox
+  database: sandbox
+  storage: 1Gi
