@@ -18,7 +18,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	store, err := dependencies.NewFakeDumplingsStore()
 	require.NoError(t, err)
 
-	instance, err := app.NewInstance(store)
+	instance, err := app.NewInstance(store, nil)
 	require.NoError(t, err)
 
 	router, err := newRouter(instance)

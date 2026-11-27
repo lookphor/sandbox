@@ -33,7 +33,7 @@ func (failingStore) CreateOrder(context.Context, ...dumplings.OrderItem) (int64,
 func newTestInstance(t *testing.T, store dumplings.Store) *Instance {
 	t.Helper()
 
-	instance, err := NewInstance(store)
+	instance, err := NewInstance(store, nil)
 	require.NoError(t, err)
 
 	return instance
